@@ -53,7 +53,7 @@ struct command
   int status;
   int *times;
   int *syscalls;
-  int *device;
+  int *io_device;
   int *sleep_time;
   int *io_size;
 };
@@ -103,7 +103,7 @@ void read_sysconfig(char argv0[], char filename[])
   fclose(sysconfig_file);
 }
 
-void get_command_lengths(FILE *fp, int lengths[])
+int get_command_lengths(FILE *fp, int lengths[])
 {
   char buffer[200];
   int command_count = 0;
@@ -129,6 +129,7 @@ void get_command_lengths(FILE *fp, int lengths[])
     }
   }
   fseek(fp, 0, SEEK_SET);
+  return command_count;
 }
 
 void read_commands(char argv0[], char filename[])
@@ -142,8 +143,17 @@ void read_commands(char argv0[], char filename[])
 
   char buffer[200];
   int command_lengths[MAX_COMMANDS];
-  int command_count = 0;
-  get_command_lengths(command_file, command_lengths);
+  int num_commands = get_command_lengths(command_file, command_lengths);
+
+  for (int i = 0; i < num_commands; i++)
+  {
+    int size_array = command_lengths[i] * sizeof(int);
+    command_list[i].times = malloc(size_array);
+    command_list[i].syscalls = malloc(size_array);
+    command_list[i].io_device = malloc(size_array);
+    command_list[i].sleep_time = malloc(size_array);
+    command_list[i].io_size = malloc(size_array);
+  }
 
   while (fgets(buffer, sizeof buffer, command_file) != NULL)
   {
