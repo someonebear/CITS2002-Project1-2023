@@ -141,7 +141,6 @@ void read_commands(char argv0[], char filename[])
     exit(EXIT_FAILURE);
   }
 
-  char buffer[200];
   int command_lengths[MAX_COMMANDS];
   int num_commands = get_command_lengths(command_file, command_lengths);
 
@@ -155,11 +154,52 @@ void read_commands(char argv0[], char filename[])
     command_list[i].io_size = malloc(size_array);
   }
 
+  char buffer[200];
+  int c_count = 0;
+  int s_count = 0;
   while (fgets(buffer, sizeof buffer, command_file) != NULL)
   {
+    trim_line(buffer);
+    if (buffer[0] == CHAR_COMMENT)
+    {
+      if (s_count == 0)
+      {
+        continue;
+      }
+      else
+      {
+        s_count = 0;
+        continue;
+      }
+    }
+    else if (buffer[0] == '\t')
+    {
+      char *syscall[6];
+      sscanf(buffer, "%iusecs %s", &command_list[c_count].times + s_count, syscall);
+      if (strcmp(syscall, "read") || strcmp(syscall, "write"))
+      {
+        // convert device and size into int
+      }
+      else if (strcmp(syscall, "sleep"))
+      {
+        // convert sleep time into int
+      }
+      else if (strcmp(syscall, "spawn"))
+      {
+        // convert spawn process into int
+      }
+      else
+      {
+        // store syscall
+      }
+      s_count += 1;
+    }
+    else
+    {
+      sscanf(buffer, "%s", command_list[c_count].name);
+      c_count += 1;
+    }
   }
-
-  printf("Command name is %s\n", buffer);
   fclose(command_file);
 }
 
