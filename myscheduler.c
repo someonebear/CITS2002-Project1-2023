@@ -45,6 +45,16 @@ struct device
 
 struct device device_list[MAX_DEVICES];
 
+struct command
+{
+  char name[MAX_COMMAND_NAME + 1];
+  int *times;
+  int *syscalls;
+  int *device;
+  int *sleep_time;
+  int *io_size;
+};
+
 void trim_line(char line[])
 {
   int i = 0;
