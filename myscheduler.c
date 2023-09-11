@@ -108,15 +108,30 @@ void read_commands(char argv0[], char filename[])
   }
 
   char buffer[200];
-
+  int syscall_count = 0;
   while (fgets(buffer, sizeof buffer, command_file) != NULL)
   {
     if (buffer[0] == CHAR_COMMENT)
     {
+      if (syscall_count == 0)
+      {
+        printf("Beginning of file.\n");
+        continue;
+      }
+      else
+      {
+        syscall_count = 0;
+        printf("New command.\n");
+        continue;
+      }
+    }
+    else if (buffer[0] == '\t')
+    {
+      syscall_count += 1;
       continue;
     }
     trim_line(buffer);
-    printf("%s\n", buffer);
+    printf("Command name is %s\n", buffer);
   }
   fclose(command_file);
 }
