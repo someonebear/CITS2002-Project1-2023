@@ -56,6 +56,7 @@ struct command
   int *io_device;
   int *sleep_time;
   int *io_size;
+  int *spawned_process;
 };
 
 struct command command_list[MAX_COMMANDS];
@@ -66,6 +67,17 @@ int syscall_to_int(char scall[])
   for (int i = 0; i < 6; i++)
   {
     if (!strcmp(scall, syscalls[i]))
+    {
+      return i;
+    }
+  }
+}
+
+int command_to_int(char command_name[])
+{
+  for (int i = 0; i < MAX_COMMANDS; i++)
+  {
+    if (!strcmp(command_name, command_list[i].name))
     {
       return i;
     }
@@ -178,6 +190,7 @@ void read_commands(char argv0[], char filename[])
     command_list[i].io_device = malloc(size_array);
     command_list[i].sleep_time = malloc(size_array);
     command_list[i].io_size = malloc(size_array);
+    command_list[i].spawned_process = malloc(size_array);
   }
 
   char buffer[200];
@@ -208,15 +221,15 @@ void read_commands(char argv0[], char filename[])
       }
       else if (!strcmp(syscall, "sleep"))
       {
-        // convert sleep time into int
+        sscanf(buffer, "%*s %*s %iusecs", &command_list[c_count].sleep_time[s_count]);
       }
       else if (!strcmp(syscall, "spawn"))
       {
-        // convert spawn process into int
+        char spawned_process[6];
+        sscanf(buffer, "%*s %*s %s", spawned_process);
+        command_list[c_count].spawned_process[s_count] = command_to_int(spawned_process);
       }
-
-      // store syscall
-
+      command_list[c_count].syscalls[s_count] = syscall_to_int(syscall);
       s_count += 1;
     }
     else
