@@ -48,6 +48,9 @@ struct device device_list[MAX_DEVICES];
 struct command
 {
   char name[MAX_COMMAND_NAME + 1];
+  int pid;
+  int ppid;
+  int status;
   int *times;
   int *syscalls;
   int *device;
