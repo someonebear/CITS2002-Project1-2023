@@ -58,6 +58,8 @@ struct command
   int *io_size;
 };
 
+struct command command_list[MAX_COMMANDS];
+
 void trim_line(char line[])
 {
   int i = 0;
@@ -101,6 +103,34 @@ void read_sysconfig(char argv0[], char filename[])
   fclose(sysconfig_file);
 }
 
+void get_command_lengths(FILE *fp, int lengths[])
+{
+  char buffer[200];
+  int command_count = 0;
+  int syscall_count = 0;
+  while (fgets(buffer, sizeof buffer, fp) != NULL)
+  {
+    if (buffer[0] == CHAR_COMMENT)
+    {
+      if (syscall_count == 0)
+      {
+        continue;
+      }
+      else
+      {
+        lengths[command_count] = syscall_count;
+        syscall_count = 0;
+        command_count += 1;
+      }
+    }
+    if (buffer[0] == '\t')
+    {
+      syscall_count += 1;
+    }
+  }
+  fseek(fp, 0, SEEK_SET);
+}
+
 void read_commands(char argv0[], char filename[])
 {
   FILE *command_file = fopen(filename, "r");
@@ -111,31 +141,15 @@ void read_commands(char argv0[], char filename[])
   }
 
   char buffer[200];
-  int syscall_count = 0;
+  int command_lengths[MAX_COMMANDS];
+  int command_count = 0;
+  get_command_lengths(command_file, command_lengths);
+
   while (fgets(buffer, sizeof buffer, command_file) != NULL)
   {
-    if (buffer[0] == CHAR_COMMENT)
-    {
-      if (syscall_count == 0)
-      {
-        printf("Beginning of file.\n");
-        continue;
-      }
-      else
-      {
-        syscall_count = 0;
-        printf("New command.\n");
-        continue;
-      }
-    }
-    else if (buffer[0] == '\t')
-    {
-      syscall_count += 1;
-      continue;
-    }
-    trim_line(buffer);
-    printf("Command name is %s\n", buffer);
   }
+
+  printf("Command name is %s\n", buffer);
   fclose(command_file);
 }
 
