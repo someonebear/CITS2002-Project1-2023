@@ -71,8 +71,8 @@ void trim_line(char line[])
 
 void read_sysconfig(char argv0[], char filename[])
 {
-  FILE *sysconfig = fopen(filename, "r");
-  if (sysconfig == NULL)
+  FILE *sysconfig_file = fopen(filename, "r");
+  if (sysconfig_file == NULL)
   {
     printf("Cannot access file - %s\n", filename);
     exit(EXIT_FAILURE);
@@ -80,7 +80,7 @@ void read_sysconfig(char argv0[], char filename[])
 
   char buffer[200];
   int d_count = 0;
-  while (fgets(buffer, sizeof buffer, sysconfig) != NULL)
+  while (fgets(buffer, sizeof buffer, sysconfig_file) != NULL)
   {
     if (buffer[0] == CHAR_COMMENT || buffer[0] == 't')
     {
@@ -95,21 +95,30 @@ void read_sysconfig(char argv0[], char filename[])
     //        device_list[d_count].read_speed, device_list[d_count].write_speed);
     ++d_count;
   }
+  fclose(sysconfig_file);
 }
-
-// enum syscalls
-// {
-//   spawn,
-//   read,
-//   write,
-//   sleep,
-//   wait,
-//   exit
-// };
-// const char *str_syscalls[] = {"spawn", "read", "write", "sleep", "wait", "exit"};
 
 void read_commands(char argv0[], char filename[])
 {
+  FILE *command_file = fopen(filename, "r");
+  if (command_file == NULL)
+  {
+    printf("Cannot access file - %s\n", filename);
+    exit(EXIT_FAILURE);
+  }
+
+  char buffer[200];
+
+  while (fgets(buffer, sizeof buffer, command_file) != NULL)
+  {
+    if (buffer[0] == CHAR_COMMENT)
+    {
+      continue;
+    }
+    trim_line(buffer);
+    printf("%s\n", buffer);
+  }
+  fclose(command_file);
 }
 
 //  ----------------------------------------------------------------------
@@ -130,10 +139,10 @@ int main(int argc, char *argv[])
   }
 
   //  READ THE SYSTEM CONFIGURATION FILE
-  read_sysconfig(argv[0], argv[1]);
+  // read_sysconfig(argv[0], argv[1]);
 
   //  READ THE COMMAND FILE
-  // read_commands(argv[0], argv[2]);
+  read_commands(argv[0], argv[2]);
 
   //  EXECUTE COMMANDS, STARTING AT FIRST IN command-file, UNTIL NONE REMAIN
   // execute_commands();
