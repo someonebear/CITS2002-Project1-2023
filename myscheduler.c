@@ -1,11 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-//  you may need other standard header files
 
 //  CITS2002 Project 1 2023
-//  Student1:   STUDENT-NUMBER1   NAME-1
-//  Student2:   STUDENT-NUMBER2   NAME-2
+//  Student1:   23062249   ZHIHAO LIN
+//  Student2:   23097196   JOSHUA CHUANG
 
 //  myscheduler (v1.0)
 //  Compile with:  cc -std=c11 -Wall -Werror -o myscheduler myscheduler.c
@@ -71,6 +70,7 @@ int syscall_to_int(char scall[])
       return i;
     }
   }
+  return -1;
 }
 
 int command_to_int(char command_name[])
@@ -82,6 +82,7 @@ int command_to_int(char command_name[])
       return i;
     }
   }
+  return -1;
 }
 
 void trim_line(char line[])
@@ -120,8 +121,6 @@ void read_sysconfig(char argv0[], char filename[])
     sscanf(buffer, "%*s %s %iBps %iBps", device_list[d_count].name,
            &device_list[d_count].read_speed, &device_list[d_count].write_speed);
 
-    // printf("Device %i,\n%s %i %i\n", d_count, device_list[d_count].name,
-    //        device_list[d_count].read_speed, device_list[d_count].write_speed);
     ++d_count;
   }
   fclose(sysconfig_file);
@@ -191,6 +190,12 @@ void read_commands(char argv0[], char filename[])
     command_list[i].sleep_time = malloc(size_array);
     command_list[i].io_size = malloc(size_array);
     command_list[i].spawned_process = malloc(size_array);
+    if (command_list[i].times == NULL || command_list[i].syscalls == NULL || command_list[i].io_device == NULL ||
+        command_list[i].sleep_time == NULL || command_list[i].io_size == NULL || command_list[i].spawned_process == NULL)
+    {
+      printf("could not allocate memory\n");
+      exit(EXIT_FAILURE);
+    }
   }
 
   char buffer[200];
@@ -208,12 +213,13 @@ void read_commands(char argv0[], char filename[])
       else
       {
         s_count = 0;
+        c_count += 1;
         continue;
       }
     }
     else if (buffer[0] == '\t')
     {
-      char *syscall[6];
+      char syscall[6];
       sscanf(buffer, "%iusecs %s", &command_list[c_count].times[s_count], syscall);
       if (!strcmp(syscall, "read") || !strcmp(syscall, "write"))
       {
@@ -235,7 +241,6 @@ void read_commands(char argv0[], char filename[])
     else
     {
       sscanf(buffer, "%s", command_list[c_count].name);
-      c_count += 1;
     }
   }
   fclose(command_file);
@@ -259,11 +264,10 @@ int main(int argc, char *argv[])
   }
 
   //  READ THE SYSTEM CONFIGURATION FILE
-  // read_sysconfig(argv[0], argv[1]);
+  read_sysconfig(argv[0], argv[1]);
 
   //  READ THE COMMAND FILE
   read_commands(argv[0], argv[2]);
-
   //  EXECUTE COMMANDS, STARTING AT FIRST IN command-file, UNTIL NONE REMAIN
   // execute_commands();
 
@@ -272,5 +276,3 @@ int main(int argc, char *argv[])
 
   exit(EXIT_SUCCESS);
 }
-
-//  vim: ts=8 sw=4
