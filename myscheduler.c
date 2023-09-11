@@ -60,6 +60,18 @@ struct command
 
 struct command command_list[MAX_COMMANDS];
 
+int syscall_to_int(char scall[])
+{
+  char *syscalls[] = {"spawn", "read", "write", "sleep", "wait", "exit"};
+  for (int i = 0; i < 6; i++)
+  {
+    if (!strcmp(scall, syscalls[i]))
+    {
+      return i;
+    }
+  }
+}
+
 void trim_line(char line[])
 {
   int i = 0;
@@ -132,6 +144,20 @@ int get_command_lengths(FILE *fp, int lengths[])
   return command_count;
 }
 
+void get_io_name_size(char string[], int command_index, int line_index)
+{
+  char device_name[MAX_DEVICE_NAME + 1];
+  sscanf(string, "%*s %*s %s %iB", device_name, &command_list[command_index].io_size[line_index]);
+  for (int i = 0; i < MAX_DEVICES; i++)
+  {
+    if (!strcmp(device_list[i].name, device_name))
+    {
+      command_list[command_index].io_device[line_index] = i;
+      break;
+    }
+  }
+}
+
 void read_commands(char argv0[], char filename[])
 {
   FILE *command_file = fopen(filename, "r");
@@ -175,23 +201,22 @@ void read_commands(char argv0[], char filename[])
     else if (buffer[0] == '\t')
     {
       char *syscall[6];
-      sscanf(buffer, "%iusecs %s", &command_list[c_count].times + s_count, syscall);
-      if (strcmp(syscall, "read") || strcmp(syscall, "write"))
+      sscanf(buffer, "%iusecs %s", &command_list[c_count].times[s_count], syscall);
+      if (!strcmp(syscall, "read") || !strcmp(syscall, "write"))
       {
-        // convert device and size into int
+        get_io_name_size(buffer, c_count, s_count);
       }
-      else if (strcmp(syscall, "sleep"))
+      else if (!strcmp(syscall, "sleep"))
       {
         // convert sleep time into int
       }
-      else if (strcmp(syscall, "spawn"))
+      else if (!strcmp(syscall, "spawn"))
       {
         // convert spawn process into int
       }
-      else
-      {
-        // store syscall
-      }
+
+      // store syscall
+
       s_count += 1;
     }
     else
