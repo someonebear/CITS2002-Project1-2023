@@ -27,10 +27,16 @@
 #define TIME_CORE_STATE_TRANSITIONS 10
 #define TIME_ACQUIRE_BUS 20
 
-//  ----------------------------------------------------------------------
-
 #define CHAR_COMMENT '#'
 
+//  ----------------------------------------------------------------------
+
+int total_time = 0;
+int cpu_time = 0;
+int pid_count = 0;
+int time_quantum = DEFAULT_TIME_QUANTUM;
+
+//  ----------------------------------------------------------------------
 struct device
 {
   char name[MAX_DEVICE_NAME + 1];
@@ -47,6 +53,7 @@ struct command
   int ppid;
   int status;
   int elapsed_time;
+  int children;
   int *times;
   int *syscalls;
   int *io_device;
@@ -64,6 +71,8 @@ int ready_back = -1;
 struct command blocked[MAX_RUNNING_PROCESSES];
 int blocked_front = -1;
 int blocked_back = -1;
+
+//  ----------------------------------------------------------------------
 
 int check_full(int front, int back)
 {
@@ -207,6 +216,8 @@ void get_io_name_size(char string[], int command_index, int line_index)
   }
 }
 
+//  ----------------------------------------------------------------------
+
 void read_sysconfig(char argv0[], char filename[])
 {
   FILE *sysconfig_file = fopen(filename, "r");
@@ -220,9 +231,18 @@ void read_sysconfig(char argv0[], char filename[])
   int d_count = 0;
   while (fgets(buffer, sizeof buffer, sysconfig_file) != NULL)
   {
-    if (buffer[0] == CHAR_COMMENT || buffer[0] == 't')
+    if (buffer[0] == CHAR_COMMENT)
     {
       continue;
+    }
+    else if (buffer[0] == 't')
+    {
+      int timeq_buffer;
+      sscanf("%*s %iusec", &timeq_buffer);
+      if (timeq_buffer != time_quantum)
+      {
+        time_quantum = timeq_buffer;
+      }
     }
     trim_line(buffer);
 
@@ -251,10 +271,10 @@ void read_commands(char argv0[], char filename[])
     int size_array = command_lengths[i] * sizeof(int);
     command_list[i].times = malloc(size_array);
     command_list[i].syscalls = malloc(size_array);
-    command_list[i].io_device = malloc(size_array);
-    command_list[i].sleep_time = malloc(size_array);
-    command_list[i].io_size = malloc(size_array);
-    command_list[i].spawned_process = malloc(size_array);
+    command_list[i].io_device = calloc(command_lengths[i], sizeof(int));
+    command_list[i].sleep_time = calloc(command_lengths[i], sizeof(int));
+    command_list[i].io_size = calloc(command_lengths[i], sizeof(int));
+    command_list[i].spawned_process = calloc(command_lengths[i], sizeof(int));
     if (command_list[i].times == NULL || command_list[i].syscalls == NULL || command_list[i].io_device == NULL ||
         command_list[i].sleep_time == NULL || command_list[i].io_size == NULL || command_list[i].spawned_process == NULL)
     {
