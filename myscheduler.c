@@ -30,13 +30,32 @@
 #define CHAR_COMMENT '#'
 
 //  ----------------------------------------------------------------------
+//  Variables for global timer.
+
+enum cpu_status
+{
+  idle,
+  exec,
+  os
+};
+
+enum process_status
+{
+  ready,
+  running,
+  blocked,
+  exited
+};
+
+enum cpu_status current_cpu_status;
 
 int total_time = 0;
 int cpu_time = 0;
-int pid_count = 0;
+int process_count = 0;
 int time_quantum = DEFAULT_TIME_QUANTUM;
 
 //  ----------------------------------------------------------------------
+//  Data structures to store sysconfig and command text file data.
 struct device
 {
   char name[MAX_DEVICE_NAME + 1];
@@ -51,8 +70,10 @@ struct command
   char name[MAX_COMMAND_NAME + 1];
   int pid;
   int ppid;
-  int status;
-  int elapsed_time;
+  enum process_status status;
+  int on_cpu;
+  // Store block end time in here, once CPU is idle, check blocked queue for finished blocks.
+  int block_end;
   int children;
   int *times;
   int *syscalls;
@@ -64,15 +85,16 @@ struct command
 
 struct command command_list[MAX_COMMANDS];
 
-struct command ready[MAX_RUNNING_PROCESSES];
+//  ----------------------------------------------------------------------
+//  Queue functions and definitions.
+
+struct command ready_queue[MAX_RUNNING_PROCESSES];
 int ready_front = -1;
 int ready_back = -1;
 
-struct command blocked[MAX_RUNNING_PROCESSES];
+struct command blocked_queue[MAX_RUNNING_PROCESSES];
 int blocked_front = -1;
 int blocked_back = -1;
-
-//  ----------------------------------------------------------------------
 
 int check_full(int front, int back)
 {
@@ -133,6 +155,9 @@ int dequeue(struct command *out_element, struct command queue[], int *front_p, i
     return 1;
   }
 }
+
+//  ----------------------------------------------------------------------
+//  Helper functions for storing text file data.
 
 int syscall_to_int(char scall[])
 {
@@ -217,6 +242,7 @@ void get_io_name_size(char string[], int command_index, int line_index)
 }
 
 //  ----------------------------------------------------------------------
+//  Functions to read text files.
 
 void read_sysconfig(char argv0[], char filename[])
 {
@@ -238,7 +264,7 @@ void read_sysconfig(char argv0[], char filename[])
     else if (buffer[0] == 't')
     {
       int timeq_buffer;
-      sscanf("%*s %iusec", &timeq_buffer);
+      sscanf(buffer, "%*s %iusec", &timeq_buffer);
       if (timeq_buffer != time_quantum)
       {
         time_quantum = timeq_buffer;
@@ -330,11 +356,81 @@ void read_commands(char argv0[], char filename[])
   }
   fclose(command_file);
 }
+//  ----------------------------------------------------------------------
+//  Helper functions for execution emulation.
+
+void new_process(struct command *buffer, struct command *template)
+{
+  memcpy(buffer, template, sizeof *buffer);
+  (*buffer).pid = process_count;
+  (*buffer).status = ready;
+  printf("Spawning new process %s, pid-%i, new -> ready 0usecs\n", (*buffer).name, (*buffer).pid);
+  process_count += 1;
+}
+
+void run(void)
+{
+  struct command *front = &ready_queue[ready_front];
+  if ((*front).status = ready)
+  {
+    total_time += 5;
+    (*front).status = running;
+    printf("Running process %s, pid-%i, ready -> running 5usecs\n",
+           (*front).name, (*front).pid);
+  }
+
+  //  Variable to determine which "line" of the command we are on
+  int line = 0;
+  for (int i = 0;; i++)
+  {
+    if ((*front).times[i] > (*front).on_cpu)
+    {
+      line = i;
+      break;
+    }
+  }
+
+  printf("Process %s now running\n", (*front).name);
+  int time_elapse = 0;
+  while (time_elapse < time_quantum)
+  {
+    int computation = (*front).times[line] - (*front).on_cpu;
+    if (computation > time_quantum)
+    {
+      time_elapse += time_quantum;
+      (*front).on_cpu += time_quantum;
+      cpu_time += time_quantum;
+      break;
+    }
+    time_elapse += computation;
+    (*front).on_cpu += computation;
+    cpu_time += computation;
+
+    // Handle system call
+  }
+
+  printf("Time quantum expired, process %s pid - %i, running -> ready 10usecs\n",
+         (*front).name, (*front).pid);
+  total_time += 10;
+  (*front).status = ready;
+  dequeue(front, ready_queue, ready_front, ready_back);
+  enqueue(*front, ready_queue, ready_front, ready_back);
+  return;
+}
 
 //  ----------------------------------------------------------------------
+//  Main driver function.
 
 void execute_commands(void)
 {
+  struct command command_buffer;
+  new_process(&command_buffer, &command_list[0]);
+  enqueue(command_buffer, ready_queue, ready_front, ready_back);
+
+  while (!check_empty(ready_front, ready_back))
+  {
+    run();
+  }
 }
 
 //  ----------------------------------------------------------------------
