@@ -9,10 +9,6 @@
 //  myscheduler (v1.0)
 //  Compile with:  cc -std=c11 -Wall -Werror -o myscheduler myscheduler.c
 
-//  THESE CONSTANTS DEFINE THE MAXIMUM SIZE OF sysconfig AND command DETAILS
-//  THAT YOUR PROGRAM NEEDS TO SUPPORT.  YOU'LL REQUIRE THESE //  CONSTANTS
-//  WHEN DEFINING THE MAXIMUM SIZES OF ANY REQUIRED DATA STRUCTURES.
-
 #define MAX_DEVICES 4
 #define MAX_DEVICE_NAME 20
 #define MAX_COMMANDS 10
@@ -50,6 +46,7 @@ struct command
   int pid;
   int ppid;
   int status;
+  int elapsed_time;
   int *times;
   int *syscalls;
   int *io_device;
@@ -59,6 +56,74 @@ struct command
 };
 
 struct command command_list[MAX_COMMANDS];
+
+struct command ready[MAX_RUNNING_PROCESSES];
+int ready_front = -1;
+int ready_back = -1;
+
+struct command blocked[MAX_RUNNING_PROCESSES];
+int blocked_front = -1;
+int blocked_back = -1;
+
+int check_full(int front, int back)
+{
+  if ((front == back + 1) || (front == 0 && back == MAX_RUNNING_PROCESSES - 1))
+  {
+    return 1;
+  }
+  return 0;
+}
+
+int check_empty(int front, int back)
+{
+  if (front == -1)
+  {
+    return 1;
+  }
+  return 0;
+}
+
+int enqueue(struct command element, struct command queue[], int *front_p, int *back_p)
+{
+  if (check_full(*front_p, *back_p))
+  {
+    printf("Cannot enqueue - queue is full.\n");
+    return 0;
+  }
+  else
+  {
+    if (*front_p == -1)
+    {
+      *front_p = 0;
+    }
+    *back_p = (*back_p + 1) % MAX_RUNNING_PROCESSES;
+    memcpy(&queue[*back_p], &element, sizeof queue[*back_p]);
+    return 1;
+  }
+}
+
+int dequeue(struct command *out_element, struct command queue[], int *front_p, int *back_p)
+{
+  if (check_empty(*front_p, *back_p))
+  {
+    printf("Cannot dequeue - empty queue.\n");
+    return 0;
+  }
+  else
+  {
+    memcpy(out_element, &queue[*front_p], sizeof *out_element);
+    if (*front_p == *back_p)
+    {
+      *front_p = -1;
+      *back_p = -1;
+    }
+    else
+    {
+      *front_p = (*front_p + 1) % MAX_RUNNING_PROCESSES;
+    }
+    return 1;
+  }
+}
 
 int syscall_to_int(char scall[])
 {
@@ -97,33 +162,6 @@ void trim_line(char line[])
     }
     i += 1;
   }
-}
-
-void read_sysconfig(char argv0[], char filename[])
-{
-  FILE *sysconfig_file = fopen(filename, "r");
-  if (sysconfig_file == NULL)
-  {
-    printf("Cannot access file - %s\n", filename);
-    exit(EXIT_FAILURE);
-  }
-
-  char buffer[200];
-  int d_count = 0;
-  while (fgets(buffer, sizeof buffer, sysconfig_file) != NULL)
-  {
-    if (buffer[0] == CHAR_COMMENT || buffer[0] == 't')
-    {
-      continue;
-    }
-    trim_line(buffer);
-
-    sscanf(buffer, "%*s %s %iBps %iBps", device_list[d_count].name,
-           &device_list[d_count].read_speed, &device_list[d_count].write_speed);
-
-    ++d_count;
-  }
-  fclose(sysconfig_file);
 }
 
 int get_command_lengths(FILE *fp, int lengths[])
@@ -167,6 +205,33 @@ void get_io_name_size(char string[], int command_index, int line_index)
       break;
     }
   }
+}
+
+void read_sysconfig(char argv0[], char filename[])
+{
+  FILE *sysconfig_file = fopen(filename, "r");
+  if (sysconfig_file == NULL)
+  {
+    printf("Cannot access file - %s\n", filename);
+    exit(EXIT_FAILURE);
+  }
+
+  char buffer[200];
+  int d_count = 0;
+  while (fgets(buffer, sizeof buffer, sysconfig_file) != NULL)
+  {
+    if (buffer[0] == CHAR_COMMENT || buffer[0] == 't')
+    {
+      continue;
+    }
+    trim_line(buffer);
+
+    sscanf(buffer, "%*s %s %iBps %iBps", device_list[d_count].name,
+           &device_list[d_count].read_speed, &device_list[d_count].write_speed);
+
+    ++d_count;
+  }
+  fclose(sysconfig_file);
 }
 
 void read_commands(char argv0[], char filename[])
