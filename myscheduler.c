@@ -406,6 +406,7 @@ void new_process(struct command *buffer, struct command *template)
 void call_exit(struct command *process)
 {
   // Decrement children field of parent process
+  total_time += 1;
   int parent_id = (*process).ppid;
   for (int i = io_front; i != io_back; i = (i + 1) % MAX_RUNNING_PROCESSES)
   {
@@ -420,7 +421,6 @@ void call_exit(struct command *process)
       break;
     }
   }
-  total_time += 1;
   printf("Process %s, pid - %i running -> exit 0usecs", (*process).name, (*process).pid);
   (*process).status = exited;
   struct command buf;
@@ -438,6 +438,23 @@ void call_spawn(int line, struct command *process)
 
   enqueue(buf, ready_queue, &ready_front, &ready_back);
   requeue(ready_queue, &ready_front, &ready_back);
+  printf("Process %s, pid - %i running -> ready 10usecs\n", (*process).name,
+         (*process).pid);
+  total_time += TIME_CORE_STATE_TRANSITIONS;
+}
+
+call_sleep(int line, struct command *process)
+{
+  total_time += 1;
+  int sleep_time = (*process).sleep_time[line];
+  (*process).block_end = total_time + sleep_time + 1;
+
+  printf("Process %s, pid - %i, %iusecs sleep, running -> sleeping 10usecs\n", (*process).name,
+         (*process).pid, sleep_time);
+  total_time += TIME_CORE_STATE_TRANSITIONS;
+  struct command buf;
+  dequeue(&buf, ready_queue, &ready_front, &ready_back);
+  enqueue(buf, blocked_queue, &blocked_front, &blocked_back);
 }
 
 void handle_syscall(int line, struct command *process)
@@ -452,6 +469,7 @@ void handle_syscall(int line, struct command *process)
   case _write_:
     break;
   case _sleep_:
+    call_sleep(line, process);
     break;
   case _wait_:
     break;
@@ -464,11 +482,11 @@ void handle_syscall(int line, struct command *process)
 void one_time_quantum(void)
 {
   struct command *front = &ready_queue[ready_front];
-  total_time += TIME_CONTEXT_SWITCH;
+
   (*front).status = running;
   printf("Running process %s, pid-%i, ready -> running 5usecs\n",
          (*front).name, (*front).pid);
-
+  total_time += TIME_CONTEXT_SWITCH;
   //  Variable to determine which "line" of the command we are on
   int line = 0;
   for (int i = 0;; i++)
@@ -511,6 +529,7 @@ void execute_commands(void)
   new_process(&command_buffer, &command_list[0]);
   enqueue(command_buffer, ready_queue, &ready_front, &ready_back);
 
+  // Change check empty to check all queues for processes
   while (!check_empty(ready_front, ready_back))
   {
     one_time_quantum();
