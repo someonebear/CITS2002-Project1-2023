@@ -107,9 +107,15 @@ struct command ready_queue[MAX_RUNNING_PROCESSES];
 int ready_front = -1;
 int ready_back = -1;
 
+// Queue for processes blocked for sleep or wait calls
 struct command blocked_queue[MAX_RUNNING_PROCESSES];
 int blocked_front = -1;
 int blocked_back = -1;
+
+// Queue for process blocked for io calls
+struct command io_queue[MAX_RUNNING_PROCESSES];
+int io_front = -1;
+int io_back = -1;
 
 int check_full(int front, int back)
 {
@@ -169,6 +175,15 @@ int dequeue(struct command *out_element, struct command queue[], int *front_p, i
     }
     return 1;
   }
+}
+
+// Requeues front element.
+int requeue(struct command queue[], int *front_p, int *back_p)
+{
+  struct command buf;
+  dequeue(&buf, queue, front_p, back_p);
+  enqueue(buf, queue, front_p, back_p);
+  return 1;
 }
 
 //  ----------------------------------------------------------------------
@@ -363,6 +378,8 @@ void read_commands(char argv0[], char filename[])
         sscanf(buffer, "%*s %*s %s", spawned_process);
         command_list[c_count].spawned_process[s_count] = command_to_int(spawned_process);
         break;
+      default:
+        break;
       }
       command_list[c_count].syscalls[s_count] = syscall;
       s_count += 1;
@@ -386,24 +403,71 @@ void new_process(struct command *buffer, struct command *template)
   process_count += 1;
 }
 
-// void handle_syscall(int line)
-// {
-//   switch (line)
-//   {
-//     case
-//   }
-// }
+void call_exit(struct command *process)
+{
+  // Decrement children field of parent process
+  int parent_id = (*process).ppid;
+  for (int i = io_front; i != io_back; i = (i + 1) % MAX_RUNNING_PROCESSES)
+  {
+    if (io_queue[i].pid == parent_id)
+    {
+      io_queue[i].children -= 1;
+      // If children is 0, then parent process can be unblocked by idle CPU later
+      if (io_queue[i].children == 0 && io_queue[i].block_end == -1)
+      {
+        io_queue[i].block_end = 0;
+      }
+      break;
+    }
+  }
+  total_time += 1;
+  printf("Process %s, pid - %i running -> exit 0usecs", (*process).name, (*process).pid);
+  (*process).status = exited;
+  struct command buf;
+  dequeue(&buf, ready, &ready_front, &ready_back);
+}
 
-void run(void)
+void call_spawn(int line, struct command *process)
+{
+  total_time += 1;
+  struct command buf;
+  int to_spawn = (*process).spawned_process[line];
+  new_process(&buf, &command_list[to_spawn]);
+  buf.ppid = (*process).pid;
+  (*process).children += 1;
+
+  enqueue(buf, ready_queue, &ready_front, &ready_back);
+  requeue(ready_queue, &ready_front, &ready_back);
+}
+
+void handle_syscall(int line, struct command *process)
+{
+  enum syscall_type syscall = (*process).syscalls[line];
+  switch (syscall)
+  {
+  case _spawn_:
+    call_spawn(line, process);
+    break;
+  case _read_:
+  case _write_:
+    break;
+  case _sleep_:
+    break;
+  case _wait_:
+    break;
+  case _exit_:
+    call_exit(process);
+    break;
+  }
+}
+
+void one_time_quantum(void)
 {
   struct command *front = &ready_queue[ready_front];
-  if ((*front).status == ready)
-  {
-    total_time += 5;
-    (*front).status = running;
-    printf("Running process %s, pid-%i, ready -> running 5usecs\n",
-           (*front).name, (*front).pid);
-  }
+  total_time += TIME_CONTEXT_SWITCH;
+  (*front).status = running;
+  printf("Running process %s, pid-%i, ready -> running 5usecs\n",
+         (*front).name, (*front).pid);
 
   //  Variable to determine which "line" of the command we are on
   int line = 0;
@@ -425,18 +489,16 @@ void run(void)
     cpu_time += time_quantum;
     printf("Time quantum expired, process %s pid - %i, running -> ready 10usecs\n",
            (*front).name, (*front).pid);
-    total_time += 10;
+    total_time += TIME_CORE_STATE_TRANSITIONS;
+    (*front).status = ready;
+    requeue(ready_queue, &ready_front, &ready_back);
   }
   else
   {
     (*front).on_cpu += computation;
     cpu_time += computation;
-    handle_syscall(line);
+    handle_syscall(line, front);
   }
-
-  (*front).status = ready;
-  dequeue(front, ready_queue, &ready_front, &ready_back);
-  enqueue(*front, ready_queue, &ready_front, &ready_back);
   return;
 }
 
@@ -451,7 +513,7 @@ void execute_commands(void)
 
   while (!check_empty(ready_front, ready_back))
   {
-    run();
+    one_time_quantum();
     // Implement idle cpu priorities here.
   }
 }
