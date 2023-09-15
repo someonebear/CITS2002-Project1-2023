@@ -73,10 +73,15 @@ struct command
   enum process_status status;
   int on_cpu;
   // Store block end time in here, once CPU is idle, check blocked queue for finished blocks.
+  // block_end time is set as soon as sleep is called, -1 if wait called
   int block_end;
+  // Store io block end time here, as io end time cannot be set as soon as read/write called,
+  // rather when io commences.
+  int io_end;
+  // Store number of children, for processes that wait for child processes.
   int children;
   int *times;
-  int *syscalls;
+  enum syscall_type *syscalls;
   int *io_device;
   int *sleep_time;
   int *io_size;
@@ -84,6 +89,16 @@ struct command
 };
 
 struct command command_list[MAX_COMMANDS];
+
+enum syscall_type
+{
+  _spawn_,
+  _read_,
+  _write_,
+  _sleep_,
+  _wait_,
+  _exit_
+};
 
 //  ----------------------------------------------------------------------
 //  Queue functions and definitions.
@@ -159,12 +174,12 @@ int dequeue(struct command *out_element, struct command queue[], int *front_p, i
 //  ----------------------------------------------------------------------
 //  Helper functions for storing text file data.
 
-int syscall_to_int(char scall[])
+int syscall_to_int(char syscall[])
 {
-  char *syscalls[] = {"spawn", "read", "write", "sleep", "wait", "exit"};
+  char *syscall_strs[] = {"spawn", "read", "write", "sleep", "wait", "exit"};
   for (int i = 0; i < 6; i++)
   {
-    if (!strcmp(scall, syscalls[i]))
+    if (!strcmp(syscall, syscall_strs[i]))
     {
       return i;
     }
@@ -294,7 +309,7 @@ void read_commands(char argv0[], char filename[])
 
   for (int i = 0; i < num_commands; i++)
   {
-    int size_array = command_lengths[i] * sizeof(int);
+    size_t size_array = command_lengths[i] * sizeof(int);
     command_list[i].times = malloc(size_array);
     command_list[i].syscalls = malloc(size_array);
     command_list[i].io_device = calloc(command_lengths[i], sizeof(int));
@@ -330,23 +345,26 @@ void read_commands(char argv0[], char filename[])
     }
     else if (buffer[0] == '\t')
     {
-      char syscall[6];
-      sscanf(buffer, "%iusecs %s", &command_list[c_count].times[s_count], syscall);
-      if (!strcmp(syscall, "read") || !strcmp(syscall, "write"))
+      char syscall_str[6];
+      sscanf(buffer, "%iusecs %s", &command_list[c_count].times[s_count], syscall_str);
+      int syscall_int = syscall_to_int(syscall_str);
+      enum syscall_type syscall = (enum syscall_type)syscall_int;
+      switch (syscall)
       {
+      case _read_:
+      case _write_:
         get_io_name_size(buffer, c_count, s_count);
-      }
-      else if (!strcmp(syscall, "sleep"))
-      {
+        break;
+      case _sleep_:
         sscanf(buffer, "%*s %*s %iusecs", &command_list[c_count].sleep_time[s_count]);
-      }
-      else if (!strcmp(syscall, "spawn"))
-      {
+        break;
+      case _spawn_:
         char spawned_process[6];
         sscanf(buffer, "%*s %*s %s", spawned_process);
         command_list[c_count].spawned_process[s_count] = command_to_int(spawned_process);
+        break;
       }
-      command_list[c_count].syscalls[s_count] = syscall_to_int(syscall);
+      command_list[c_count].syscalls[s_count] = syscall;
       s_count += 1;
     }
     else
@@ -368,10 +386,18 @@ void new_process(struct command *buffer, struct command *template)
   process_count += 1;
 }
 
+// void handle_syscall(int line)
+// {
+//   switch (line)
+//   {
+//     case
+//   }
+// }
+
 void run(void)
 {
   struct command *front = &ready_queue[ready_front];
-  if ((*front).status = ready)
+  if ((*front).status == ready)
   {
     total_time += 5;
     (*front).status = running;
@@ -391,30 +417,26 @@ void run(void)
   }
 
   printf("Process %s now running\n", (*front).name);
-  int time_elapse = 0;
-  while (time_elapse < time_quantum)
+
+  int computation = (*front).times[line] - (*front).on_cpu;
+  if (computation > time_quantum)
   {
-    int computation = (*front).times[line] - (*front).on_cpu;
-    if (computation > time_quantum)
-    {
-      time_elapse += time_quantum;
-      (*front).on_cpu += time_quantum;
-      cpu_time += time_quantum;
-      break;
-    }
-    time_elapse += computation;
+    (*front).on_cpu += time_quantum;
+    cpu_time += time_quantum;
+    printf("Time quantum expired, process %s pid - %i, running -> ready 10usecs\n",
+           (*front).name, (*front).pid);
+    total_time += 10;
+  }
+  else
+  {
     (*front).on_cpu += computation;
     cpu_time += computation;
-
-    // Handle system call
+    handle_syscall(line);
   }
 
-  printf("Time quantum expired, process %s pid - %i, running -> ready 10usecs\n",
-         (*front).name, (*front).pid);
-  total_time += 10;
   (*front).status = ready;
-  dequeue(front, ready_queue, ready_front, ready_back);
-  enqueue(*front, ready_queue, ready_front, ready_back);
+  dequeue(front, ready_queue, &ready_front, &ready_back);
+  enqueue(*front, ready_queue, &ready_front, &ready_back);
   return;
 }
 
@@ -425,11 +447,12 @@ void execute_commands(void)
 {
   struct command command_buffer;
   new_process(&command_buffer, &command_list[0]);
-  enqueue(command_buffer, ready_queue, ready_front, ready_back);
+  enqueue(command_buffer, ready_queue, &ready_front, &ready_back);
 
   while (!check_empty(ready_front, ready_back))
   {
     run();
+    // Implement idle cpu priorities here.
   }
 }
 
