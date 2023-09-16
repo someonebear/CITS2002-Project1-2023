@@ -75,8 +75,9 @@ struct command
   // Store block end time in here, once CPU is idle, check blocked queue for finished blocks.
   // block_end time is set as soon as sleep is called, -1 if wait called
   int block_end;
-  // Store io block end time here, as io end time cannot be set as soon as read/write called,
-  // rather when io commences.
+  // Store io total time here, as io end time cannot be set as soon as read/write called,
+  // rather when io commences. Add to block_end once io commences
+  int io_time;
   int io_end;
   // Store number of children, for processes that wait for child processes.
   int children;
@@ -443,18 +444,60 @@ void call_spawn(int line, struct command *process)
   total_time += TIME_CORE_STATE_TRANSITIONS;
 }
 
-call_sleep(int line, struct command *process)
+void call_sleep(int line, struct command *process)
 {
   total_time += 1;
   int sleep_time = (*process).sleep_time[line];
   (*process).block_end = total_time + sleep_time + 1;
 
-  printf("Process %s, pid - %i, %iusecs sleep, running -> sleeping 10usecs\n", (*process).name,
+  printf("Process %s, pid - %i, %iusecs sleep, running -> sleeping 10usecs transition\n", (*process).name,
          (*process).pid, sleep_time);
   total_time += TIME_CORE_STATE_TRANSITIONS;
   struct command buf;
   dequeue(&buf, ready_queue, &ready_front, &ready_back);
   enqueue(buf, blocked_queue, &blocked_front, &blocked_back);
+}
+
+void call_wait(struct command *process)
+{
+  total_time += 1;
+  printf("Process %s, pid - %i, running -> wait 10usecs transition", (*process).name, (*process).pid);
+  total_time += TIME_CORE_STATE_TRANSITIONS;
+
+  (*process).block_end = -1;
+  struct command buf;
+  dequeue(&buf, ready_queue, &ready_front, &ready_back);
+  enqueue(buf, blocked_queue, &blocked_front, &blocked_back);
+}
+
+void call_io(int line, struct command *process, enum syscall_type io_type)
+{
+  total_time += 1;
+  int device = (*process).io_device[line];
+  int size = (*process).io_size[line];
+  switch (io_type)
+  {
+  case _read_:
+    int rspeed = device_list[device].read_speed;
+    int rtime = size / rspeed;
+    (*process).io_time = rtime;
+    printf("Reading %ibytes, pid - %i, running -> blocked, transition 10usecs\n", size, (*process).pid);
+    break;
+  case _write_:
+    int wspeed = device_list[device].write_speed;
+    int wtime = size / wspeed;
+    (*process).io_time = wtime;
+    printf("Writing %ibytes, pid - %i, running -> blocked, transition 10usecs\n", size, (*process).pid);
+    break;
+  default:
+    printf("Invalid io call type.\n");
+    exit(EXIT_FAILURE);
+  }
+
+  total_time += TIME_CORE_STATE_TRANSITIONS;
+  struct command buf;
+  dequeue(&buf, ready_queue, &ready_front, &ready_back);
+  enqueue(buf, io_queue, &io_front, &io_back);
 }
 
 void handle_syscall(int line, struct command *process)
@@ -467,11 +510,13 @@ void handle_syscall(int line, struct command *process)
     break;
   case _read_:
   case _write_:
+    call_io(line, process, syscall);
     break;
   case _sleep_:
     call_sleep(line, process);
     break;
   case _wait_:
+    call_wait(process);
     break;
   case _exit_:
     call_exit(process);
@@ -554,10 +599,11 @@ int main(int argc, char *argv[])
   //  READ THE COMMAND FILE
   read_commands(argv[0], argv[2]);
   //  EXECUTE COMMANDS, STARTING AT FIRST IN command-file, UNTIL NONE REMAIN
-  // execute_commands();
+  execute_commands();
 
   //  PRINT THE PROGRAM'S RESULTS
-  // printf("measurements  %i  %i\n", 0, 0);
+  int percentage = cpu_time / total_time;
+  printf("measurements  %i  %i\n", total_time, percentage);
 
   exit(EXIT_SUCCESS);
 }
