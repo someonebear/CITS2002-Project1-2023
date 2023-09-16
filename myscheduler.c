@@ -30,15 +30,7 @@
 #define CHAR_COMMENT '#'
 
 //  ----------------------------------------------------------------------
-//  Variables for global timer.
-
-enum databus_status
-{
-  vacant,
-  occupied
-};
-
-enum databus_status databus;
+//  Variables for global timer
 
 int total_time = 0;
 int cpu_time = 0;
@@ -48,6 +40,7 @@ int time_quantum = DEFAULT_TIME_QUANTUM;
 
 //  ----------------------------------------------------------------------
 //  Data structures to store sysconfig and command text file data.
+
 struct device
 {
   char name[MAX_DEVICE_NAME + 1];
@@ -63,15 +56,15 @@ struct command
   int pid;
   int ppid;
   int on_cpu;
-  // Store block end time in here, once CPU is idle, check blocked queue for finished blocks.
-  // block_end time is set as soon as sleep is called, -1 if wait called
+  // Block end time, -1 if waiting
   int block_end;
-  // Store io total time here, as io end time cannot be set as soon as read/write called,
-  // rather when io commences. Add to block_end once io commences
   int io_time;
+  int io_device_waiting;
+  // io operation end time, -1 if waiting for databus
   int io_end;
   // Store number of children, for processes that wait for child processes.
   int children;
+  // Pointers to arrays that store command file data
   int *times;
   enum syscall_type *syscalls;
   int *io_device;
@@ -81,6 +74,17 @@ struct command
 };
 
 struct command command_list[MAX_COMMANDS];
+
+//  ----------------------------------------------------------------------
+//  Enumerated types for readability.
+
+enum databus_status
+{
+  vacant,
+  occupied
+};
+
+enum databus_status databus;
 
 enum syscall_type
 {
@@ -127,12 +131,12 @@ int check_empty(int front)
   return 0;
 }
 
-int enqueue(struct command element, struct command queue[], int *front_p, int *back_p)
+//  Enqueue create a copy of element passed to it.
+void enqueue(struct command element, struct command queue[], int *front_p, int *back_p)
 {
   if (check_full(*front_p, *back_p))
   {
     printf("Cannot enqueue - queue is full.\n");
-    return 0;
   }
   else
   {
@@ -142,16 +146,14 @@ int enqueue(struct command element, struct command queue[], int *front_p, int *b
     }
     *back_p = (*back_p + 1) % MAX_RUNNING_PROCESSES;
     memcpy(&queue[*back_p], &element, sizeof queue[*back_p]);
-    return 1;
   }
 }
 
-int dequeue(struct command *out_element, struct command queue[], int *front_p, int *back_p)
+void dequeue(struct command *out_element, struct command queue[], int *front_p, int *back_p)
 {
   if (check_empty(*front_p))
   {
     printf("Cannot dequeue - empty queue.\n");
-    return 0;
   }
   else
   {
@@ -165,22 +167,21 @@ int dequeue(struct command *out_element, struct command queue[], int *front_p, i
     {
       *front_p = (*front_p + 1) % MAX_RUNNING_PROCESSES;
     }
-    return 1;
   }
 }
 
-// Requeues front element.
-int requeue(struct command queue[], int *front_p, int *back_p)
+// Dequeue front element and enqueue to same queue
+void requeue(struct command queue[], int *front_p, int *back_p)
 {
   struct command buf;
   dequeue(&buf, queue, front_p, back_p);
   enqueue(buf, queue, front_p, back_p);
-  return 1;
 }
 
 //  ----------------------------------------------------------------------
 //  Helper functions for storing text file data.
 
+//  Convert system call string in file to an int
 int syscall_to_int(char syscall[])
 {
   char *syscall_strs[] = {"spawn", "read", "write", "sleep", "wait", "exit"};
@@ -191,9 +192,12 @@ int syscall_to_int(char syscall[])
       return i;
     }
   }
-  return -1;
+  printf("Invalid system call.\n");
+  exit(EXIT_FAILURE);
 }
 
+//  Convert command name string to int
+//  Int is the index of the command in command_list
 int command_to_int(char command_name[])
 {
   for (int i = 0; i < MAX_COMMANDS; i++)
@@ -207,6 +211,7 @@ int command_to_int(char command_name[])
   exit(EXIT_FAILURE);
 }
 
+//  From CITS2002 lecture.
 void trim_line(char line[])
 {
   int i = 0;
@@ -221,6 +226,7 @@ void trim_line(char line[])
   }
 }
 
+//  Return number of commands in the file, and modify array with the number of lines in each command
 int get_command_lengths(FILE *fp, int lengths[])
 {
   char buffer[200];
@@ -230,10 +236,12 @@ int get_command_lengths(FILE *fp, int lengths[])
   {
     if (buffer[0] == CHAR_COMMENT)
     {
+      // First comment line is skipped
       if (syscall_count == 0)
       {
         continue;
       }
+      // Subsequent comment lines increment
       else
       {
         lengths[command_count] = syscall_count;
@@ -246,10 +254,13 @@ int get_command_lengths(FILE *fp, int lengths[])
       syscall_count += 1;
     }
   }
+  // Reset file pointer
   fseek(fp, 0, SEEK_SET);
   return command_count;
 }
 
+//  Get the name of io device and size of io
+//  Store device as int
 void get_io_name_size(char string[], int command_index, int line_index)
 {
   char device_name[MAX_DEVICE_NAME + 1];
@@ -294,10 +305,8 @@ void read_sysconfig(char argv0[], char filename[])
       }
     }
     trim_line(buffer);
-
     sscanf(buffer, "%*s %s %iBps %iBps", device_list[d_count].name,
            &device_list[d_count].read_speed, &device_list[d_count].write_speed);
-
     ++d_count;
   }
   fclose(sysconfig_file);
@@ -312,9 +321,9 @@ void read_commands(char argv0[], char filename[])
     exit(EXIT_FAILURE);
   }
 
+  // Create correct size array for each command, rather than same size array for all
   int command_lengths[MAX_COMMANDS];
   int num_commands = get_command_lengths(command_file, command_lengths);
-
   for (int i = 0; i < num_commands; i++)
   {
     size_t size_array = command_lengths[i] * sizeof(int);
@@ -324,6 +333,8 @@ void read_commands(char argv0[], char filename[])
     command_list[i].sleep_time = calloc(command_lengths[i], sizeof(int));
     command_list[i].io_size = calloc(command_lengths[i], sizeof(int));
     command_list[i].spawned_process = calloc(command_lengths[i], sizeof(int));
+
+    // Check malloc calls.
     if (command_list[i].times == NULL || command_list[i].syscalls == NULL || command_list[i].io_device == NULL ||
         command_list[i].sleep_time == NULL || command_list[i].io_size == NULL || command_list[i].spawned_process == NULL)
     {
@@ -335,7 +346,7 @@ void read_commands(char argv0[], char filename[])
   char buffer[200];
   int c_count = 0;
   int s_count = 0;
-  // Store every command name first
+  // Pass through file once, to store all command names.
   while (fgets(buffer, sizeof buffer, command_file) != NULL)
   {
     trim_line(buffer);
@@ -358,6 +369,7 @@ void read_commands(char argv0[], char filename[])
     trim_line(buffer);
     if (buffer[0] == CHAR_COMMENT)
     {
+      // Skip first comment line
       if (s_count == 0)
       {
         continue;
@@ -369,6 +381,7 @@ void read_commands(char argv0[], char filename[])
         continue;
       }
     }
+    // Store system call information
     else if (buffer[0] == '\t')
     {
       char syscall_str[6];
@@ -387,7 +400,6 @@ void read_commands(char argv0[], char filename[])
       case _spawn_:
         char spawned_process[MAX_COMMAND_NAME];
         sscanf(buffer, "%*s %*s %s", spawned_process);
-        // Cannot store spawned process yet as the process itself has not been stored
         command_list[c_count].spawned_process[s_count] = command_to_int(spawned_process);
         break;
       default:
@@ -399,6 +411,7 @@ void read_commands(char argv0[], char filename[])
   }
   fclose(command_file);
 }
+
 //  ----------------------------------------------------------------------
 //  Helper functions for execution emulation.
 
@@ -414,7 +427,7 @@ void new_process(struct command *buffer, struct command *template)
 
 void call_exit(struct command *process)
 {
-  // Decrement children field of parent process
+  // Decrement children field of parent process, so they can be unblocked later.
   total_time += 1;
   int parent_id = (*process).ppid;
   for (int i = blocked_front; i != (blocked_back + 1) % MAX_RUNNING_PROCESSES && !check_empty(blocked_front); i = (i + 1) % MAX_RUNNING_PROCESSES)
@@ -424,6 +437,7 @@ void call_exit(struct command *process)
       blocked_queue[i].children -= 1;
     }
   }
+
   printf("Time - %i\n", total_time);
   printf("Process %s, pid - %i running -> exit, transition 0usecs\n", (*process).name, (*process).pid);
   struct command buf;
@@ -440,8 +454,12 @@ void call_spawn(int line, struct command *process)
   buf.ppid = (*process).pid;
   (*process).children += 1;
 
+  // Queue child
   enqueue(buf, ready_queue, &ready_front, &ready_back);
+
+  // Queue parent
   requeue(ready_queue, &ready_front, &ready_back);
+
   printf("Time - %i\n", total_time);
   printf("Process %s, pid - %i running -> ready, transition 10usecs\n", (*process).name,
          (*process).pid);
@@ -453,10 +471,12 @@ void call_sleep(int line, struct command *process)
   total_time += 1;
   int sleep_time = (*process).sleep_time[line];
   (*process).block_end = total_time + sleep_time + 1;
+
   printf("Time - %i\n", total_time);
   printf("Process %s, pid - %i, %iusecs sleep, running -> sleeping, transition 10usecs\n", (*process).name,
          (*process).pid, sleep_time);
   total_time += TIME_CORE_STATE_TRANSITIONS;
+
   struct command buf;
   dequeue(&buf, ready_queue, &ready_front, &ready_back);
   enqueue(buf, blocked_queue, &blocked_front, &blocked_back);
@@ -480,6 +500,7 @@ void call_io(int line, struct command *process, enum syscall_type io_type)
   total_time += 1;
   int device = (*process).io_device[line];
   int size = (*process).io_size[line];
+
   switch (io_type)
   {
   case _read_:
@@ -496,12 +517,16 @@ void call_io(int line, struct command *process, enum syscall_type io_type)
     printf("Time - %i\n", total_time);
     printf("Writing %ibytes, pid - %i, running -> blocked, transition 10usecs\n", size, (*process).pid);
     break;
+
   default:
     printf("Invalid io call type.\n");
     exit(EXIT_FAILURE);
   }
 
+  (*process).io_device_waiting = device;
+  (*process).io_end = -1;
   total_time += TIME_CORE_STATE_TRANSITIONS;
+
   struct command buf;
   dequeue(&buf, ready_queue, &ready_front, &ready_back);
   enqueue(buf, io_queue, &io_front, &io_back);
@@ -531,14 +556,15 @@ void handle_syscall(int line, struct command *process)
   }
 }
 
+// Run for one time quantum, or one line, whichever is shorter, and handle system call
 void one_time_quantum(void)
 {
   struct command *front = &ready_queue[ready_front];
-
   printf("Time - %i\n", total_time);
   printf("Running process %s, pid - %i, ready -> running, transition 5usecs\n",
          (*front).name, (*front).pid);
   total_time += TIME_CONTEXT_SWITCH;
+
   //  Variable to determine which "line" of the command we are on
   int line = 0;
   for (int i = 0;; i++)
@@ -549,9 +575,11 @@ void one_time_quantum(void)
       break;
     }
   }
+
   printf("Time - %i\n", total_time);
   printf("Process %s now running\n", (*front).name);
 
+  // Determine how far into the "line" we are.
   int computation = (*front).times[line] - (*front).on_cpu;
   if (computation > time_quantum)
   {
@@ -575,8 +603,10 @@ void one_time_quantum(void)
 
 void unblock_sleep(void)
 {
+  // Traverse circular queue. Works for queues with one element and will not traverse empty queues.
   for (int i = blocked_front; i != (blocked_back + 1) % MAX_RUNNING_PROCESSES && !check_empty(blocked_front); i = (i + 1) % MAX_RUNNING_PROCESSES)
   {
+    // Skip waiting processes
     if (blocked_queue[i].block_end == -1)
     {
       requeue(blocked_queue, &blocked_front, &blocked_back);
@@ -586,6 +616,7 @@ void unblock_sleep(void)
     {
       struct command buf;
       dequeue(&buf, blocked_queue, &blocked_front, &blocked_back);
+      buf.block_end = 0;
       enqueue(buf, ready_queue, &ready_front, &ready_back);
       printf("Time - %i\n", total_time);
       printf("pid - %i waking, sleeping -> ready, transition 10usecs\n", buf.pid);
@@ -596,8 +627,10 @@ void unblock_sleep(void)
 
 void unblock_wait(void)
 {
+  // Traversing circular queue as above.
   for (int i = blocked_front; i != (blocked_back + 1) % MAX_RUNNING_PROCESSES && !check_empty(blocked_front); i = (i + 1) % MAX_RUNNING_PROCESSES)
   {
+    // Skip sleeping processes.
     if (blocked_queue[i].block_end != -1)
     {
       requeue(blocked_queue, &blocked_front, &blocked_back);
@@ -618,6 +651,30 @@ void unblock_wait(void)
 
 void unblock_io(void)
 {
+  for (int i = io_front; i != (io_back + 1) % MAX_RUNNING_PROCESSES && !check_empty(io_front); i = (i + 1) % MAX_RUNNING_PROCESSES)
+  {
+    if (io_queue[i].io_end == -1)
+    {
+      requeue(io_queue, &io_front, &io_back);
+      continue;
+    }
+    if (io_queue[i].io_end <= total_time)
+    {
+      struct command buf;
+      dequeue(&buf, io_queue, &io_front, &io_back);
+      buf.io_end = 0;
+      enqueue(buf, ready_queue, &ready_front, &ready_back);
+      printf("Time - %i\n", total_time);
+      printf("pid - %i completed io, blocked -> ready, transition 10usecs\n", buf.pid);
+      total_time += TIME_CORE_STATE_TRANSITIONS;
+    }
+  }
+}
+
+//  Comparison functions for qsort()
+int comp(const void *a, const void *b)
+{
+  return (*(int *)a - *(int *)b);
 }
 
 void commence_io(void)
@@ -629,6 +686,7 @@ void commence_io(void)
 
 void execute_commands(void)
 {
+  // Run first command in file.
   struct command command_buffer;
   new_process(&command_buffer, &command_list[0]);
   enqueue(command_buffer, ready_queue, &ready_front, &ready_back);
@@ -640,7 +698,7 @@ void execute_commands(void)
       one_time_quantum();
     }
 
-    // Implement idle cpu priorities here.
+    // Idle CPU operations.
     if (!check_full(ready_front, ready_back))
     {
       unblock_sleep();
@@ -650,6 +708,7 @@ void execute_commands(void)
 
     commence_io();
 
+    // If nothing is ready and no io commences after checks, then increment time.
     if (check_empty(ready_front) && databus == vacant)
     {
       total_time += 1;
@@ -676,6 +735,7 @@ int main(int argc, char *argv[])
   execute_commands();
 
   //  PRINT THE PROGRAM'S RESULTS
+  //  Program adds one usec at end. Take away for accuracy.
   total_time -= 1;
   int percentage = cpu_time * 100 / (total_time);
   printf("measurements  %i  %i\n", total_time, percentage);
