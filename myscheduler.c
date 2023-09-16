@@ -32,13 +32,6 @@
 //  ----------------------------------------------------------------------
 //  Variables for global timer.
 
-enum cpu_status
-{
-  idle,
-  exec,
-  os
-};
-
 enum process_status
 {
   ready,
@@ -47,7 +40,13 @@ enum process_status
   exited
 };
 
-enum cpu_status current_cpu_status;
+enum databus_status
+{
+  vacant,
+  occupied
+};
+
+enum databus_status databus;
 
 int total_time = 0;
 int cpu_time = 0;
@@ -127,7 +126,7 @@ int check_full(int front, int back)
   return 0;
 }
 
-int check_empty(int front, int back)
+int check_empty(int front)
 {
   if (front == -1)
   {
@@ -157,7 +156,7 @@ int enqueue(struct command element, struct command queue[], int *front_p, int *b
 
 int dequeue(struct command *out_element, struct command queue[], int *front_p, int *back_p)
 {
-  if (check_empty(*front_p, *back_p))
+  if (check_empty(*front_p))
   {
     printf("Cannot dequeue - empty queue.\n");
     return 0;
@@ -400,7 +399,8 @@ void new_process(struct command *buffer, struct command *template)
   memcpy(buffer, template, sizeof *buffer);
   (*buffer).pid = process_count;
   (*buffer).status = ready;
-  printf("Spawning new process %s, pid-%i, new -> ready 0usecs\n", (*buffer).name, (*buffer).pid);
+  printf("Time - %i\n", total_time);
+  printf("Spawning new process %s, pid-%i, new -> ready, transition 0usecs\n", (*buffer).name, (*buffer).pid);
   process_count += 1;
 }
 
@@ -409,7 +409,7 @@ void call_exit(struct command *process)
   // Decrement children field of parent process
   total_time += 1;
   int parent_id = (*process).ppid;
-  for (int i = io_front; i != io_back; i = (i + 1) % MAX_RUNNING_PROCESSES)
+  for (int i = io_front; i != (io_back + 1) % MAX_RUNNING_PROCESSES; i = (i + 1) % MAX_RUNNING_PROCESSES)
   {
     if (io_queue[i].pid == parent_id)
     {
@@ -422,10 +422,11 @@ void call_exit(struct command *process)
       break;
     }
   }
-  printf("Process %s, pid - %i running -> exit 0usecs", (*process).name, (*process).pid);
+  printf("Time - %i\n", total_time);
+  printf("Process %s, pid - %i running -> exit, transition 0usecs\n", (*process).name, (*process).pid);
   (*process).status = exited;
   struct command buf;
-  dequeue(&buf, ready, &ready_front, &ready_back);
+  dequeue(&buf, ready_queue, &ready_front, &ready_back);
 }
 
 void call_spawn(int line, struct command *process)
@@ -439,7 +440,8 @@ void call_spawn(int line, struct command *process)
 
   enqueue(buf, ready_queue, &ready_front, &ready_back);
   requeue(ready_queue, &ready_front, &ready_back);
-  printf("Process %s, pid - %i running -> ready 10usecs\n", (*process).name,
+  printf("Time - %i\n", total_time);
+  printf("Process %s, pid - %i running -> ready, transition 10usecs\n", (*process).name,
          (*process).pid);
   total_time += TIME_CORE_STATE_TRANSITIONS;
 }
@@ -449,8 +451,8 @@ void call_sleep(int line, struct command *process)
   total_time += 1;
   int sleep_time = (*process).sleep_time[line];
   (*process).block_end = total_time + sleep_time + 1;
-
-  printf("Process %s, pid - %i, %iusecs sleep, running -> sleeping 10usecs transition\n", (*process).name,
+  printf("Time - %i\n", total_time);
+  printf("Process %s, pid - %i, %iusecs sleep, running -> sleeping, transition 10usecs\n", (*process).name,
          (*process).pid, sleep_time);
   total_time += TIME_CORE_STATE_TRANSITIONS;
   struct command buf;
@@ -461,7 +463,8 @@ void call_sleep(int line, struct command *process)
 void call_wait(struct command *process)
 {
   total_time += 1;
-  printf("Process %s, pid - %i, running -> wait 10usecs transition", (*process).name, (*process).pid);
+  printf("Time - %i\n", total_time);
+  printf("Process %s, pid - %i, running -> wait, transition 10usecs\n", (*process).name, (*process).pid);
   total_time += TIME_CORE_STATE_TRANSITIONS;
 
   (*process).block_end = -1;
@@ -481,12 +484,14 @@ void call_io(int line, struct command *process, enum syscall_type io_type)
     int rspeed = device_list[device].read_speed;
     int rtime = size / rspeed;
     (*process).io_time = rtime;
+    printf("Time - %i\n", total_time);
     printf("Reading %ibytes, pid - %i, running -> blocked, transition 10usecs\n", size, (*process).pid);
     break;
   case _write_:
     int wspeed = device_list[device].write_speed;
     int wtime = size / wspeed;
     (*process).io_time = wtime;
+    printf("Time - %i\n", total_time);
     printf("Writing %ibytes, pid - %i, running -> blocked, transition 10usecs\n", size, (*process).pid);
     break;
   default:
@@ -529,7 +534,8 @@ void one_time_quantum(void)
   struct command *front = &ready_queue[ready_front];
 
   (*front).status = running;
-  printf("Running process %s, pid-%i, ready -> running 5usecs\n",
+  printf("Time - %i\n", total_time);
+  printf("Running process %s, pid-%i, ready -> running, transition 5usecs\n",
          (*front).name, (*front).pid);
   total_time += TIME_CONTEXT_SWITCH;
   //  Variable to determine which "line" of the command we are on
@@ -542,7 +548,7 @@ void one_time_quantum(void)
       break;
     }
   }
-
+  printf("Time - %i\n", total_time);
   printf("Process %s now running\n", (*front).name);
 
   int computation = (*front).times[line] - (*front).on_cpu;
@@ -550,6 +556,7 @@ void one_time_quantum(void)
   {
     (*front).on_cpu += time_quantum;
     cpu_time += time_quantum;
+    total_time += time_quantum;
     printf("Time quantum expired, process %s pid - %i, running -> ready 10usecs\n",
            (*front).name, (*front).pid);
     total_time += TIME_CORE_STATE_TRANSITIONS;
@@ -560,11 +567,56 @@ void one_time_quantum(void)
   {
     (*front).on_cpu += computation;
     cpu_time += computation;
+    total_time += computation;
     handle_syscall(line, front);
   }
   return;
 }
 
+void unblock_sleep(void)
+{
+  for (int i = blocked_front; i != (blocked_back + 1) % MAX_RUNNING_PROCESSES && !check_empty(blocked_front); i = (i + 1) % MAX_RUNNING_PROCESSES)
+  {
+    if (blocked_queue[i].block_end == -1)
+    {
+      requeue(blocked_queue, &blocked_front, &blocked_back);
+      continue;
+    }
+    if (blocked_queue[i].block_end <= total_time)
+    {
+      struct command buf;
+      dequeue(&buf, blocked_queue, &blocked_front, &blocked_back);
+      enqueue(buf, ready_queue, &ready_front, &ready_back);
+      printf("Time - %i\n", total_time);
+      printf("pid - %i waking, sleeping -> ready, transition 10usecs\n", buf.pid);
+      total_time += TIME_CORE_STATE_TRANSITIONS;
+    }
+  }
+}
+
+void unblock_wait(void)
+{
+}
+
+void unblock_io(void)
+{
+}
+
+void commence_io(void)
+{
+}
+
+int all_queues_empty(void)
+{
+  if (check_empty(ready_front) && check_empty(blocked_front) && check_empty(io_front))
+  {
+    return 1;
+  }
+  else
+  {
+    return 0;
+  }
+}
 //  ----------------------------------------------------------------------
 //  Main driver function.
 
@@ -574,14 +626,26 @@ void execute_commands(void)
   new_process(&command_buffer, &command_list[0]);
   enqueue(command_buffer, ready_queue, &ready_front, &ready_back);
 
-  // Change check empty to check all queues for processes
-  while (!check_empty(ready_front, ready_back))
+  while (!all_queues_empty())
   {
-    one_time_quantum();
+    if (!check_empty(ready_front))
+    {
+      one_time_quantum();
+    }
+
     // Implement idle cpu priorities here.
+    unblock_sleep();
+    unblock_wait();
+    unblock_io();
+    commence_io();
+
+    // if nothing was unblocked, increment time, until something is unblocked.
+    if (check_empty(ready_front) && databus == vacant)
+    {
+      total_time += 1;
+    }
   }
 }
-
 //  ----------------------------------------------------------------------
 
 int main(int argc, char *argv[])
@@ -602,7 +666,7 @@ int main(int argc, char *argv[])
   execute_commands();
 
   //  PRINT THE PROGRAM'S RESULTS
-  int percentage = cpu_time / total_time;
+  int percentage = cpu_time * 100 / total_time;
   printf("measurements  %i  %i\n", total_time, percentage);
 
   exit(EXIT_SUCCESS);
