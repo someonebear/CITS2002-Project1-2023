@@ -32,14 +32,6 @@
 //  ----------------------------------------------------------------------
 //  Variables for global timer.
 
-enum process_status
-{
-  ready,
-  running,
-  blocked,
-  exited
-};
-
 enum databus_status
 {
   vacant,
@@ -50,7 +42,8 @@ enum databus_status databus;
 
 int total_time = 0;
 int cpu_time = 0;
-int process_count = 0;
+int processes_made = 0;
+int nprocesses = 0;
 int time_quantum = DEFAULT_TIME_QUANTUM;
 
 //  ----------------------------------------------------------------------
@@ -69,7 +62,6 @@ struct command
   char name[MAX_COMMAND_NAME + 1];
   int pid;
   int ppid;
-  enum process_status status;
   int on_cpu;
   // Store block end time in here, once CPU is idle, check blocked queue for finished blocks.
   // block_end time is set as soon as sleep is called, -1 if wait called
@@ -211,7 +203,8 @@ int command_to_int(char command_name[])
       return i;
     }
   }
-  return -1;
+  printf("Invalid command name to spawn.\n");
+  exit(EXIT_FAILURE);
 }
 
 void trim_line(char line[])
@@ -342,6 +335,24 @@ void read_commands(char argv0[], char filename[])
   char buffer[200];
   int c_count = 0;
   int s_count = 0;
+  // Store every command name first
+  while (fgets(buffer, sizeof buffer, command_file) != NULL)
+  {
+    trim_line(buffer);
+    if (buffer[0] == CHAR_COMMENT || buffer[0] == '\t')
+    {
+      continue;
+    }
+    else
+    {
+      sscanf(buffer, "%s", command_list[c_count].name);
+      c_count += 1;
+    }
+  }
+
+  fseek(command_file, 0, SEEK_SET);
+  c_count = 0;
+
   while (fgets(buffer, sizeof buffer, command_file) != NULL)
   {
     trim_line(buffer);
@@ -374,8 +385,9 @@ void read_commands(char argv0[], char filename[])
         sscanf(buffer, "%*s %*s %iusecs", &command_list[c_count].sleep_time[s_count]);
         break;
       case _spawn_:
-        char spawned_process[6];
+        char spawned_process[MAX_COMMAND_NAME];
         sscanf(buffer, "%*s %*s %s", spawned_process);
+        // Cannot store spawned process yet as the process itself has not been stored
         command_list[c_count].spawned_process[s_count] = command_to_int(spawned_process);
         break;
       default:
@@ -383,10 +395,6 @@ void read_commands(char argv0[], char filename[])
       }
       command_list[c_count].syscalls[s_count] = syscall;
       s_count += 1;
-    }
-    else
-    {
-      sscanf(buffer, "%s", command_list[c_count].name);
     }
   }
   fclose(command_file);
@@ -397,11 +405,11 @@ void read_commands(char argv0[], char filename[])
 void new_process(struct command *buffer, struct command *template)
 {
   memcpy(buffer, template, sizeof *buffer);
-  (*buffer).pid = process_count;
-  (*buffer).status = ready;
+  (*buffer).pid = processes_made;
   printf("Time - %i\n", total_time);
   printf("Spawning new process %s, pid-%i, new -> ready, transition 0usecs\n", (*buffer).name, (*buffer).pid);
-  process_count += 1;
+  processes_made += 1;
+  nprocesses += 1;
 }
 
 void call_exit(struct command *process)
@@ -409,24 +417,18 @@ void call_exit(struct command *process)
   // Decrement children field of parent process
   total_time += 1;
   int parent_id = (*process).ppid;
-  for (int i = io_front; i != (io_back + 1) % MAX_RUNNING_PROCESSES; i = (i + 1) % MAX_RUNNING_PROCESSES)
+  for (int i = blocked_front; i != (blocked_back + 1) % MAX_RUNNING_PROCESSES && !check_empty(blocked_front); i = (i + 1) % MAX_RUNNING_PROCESSES)
   {
-    if (io_queue[i].pid == parent_id)
+    if (blocked_queue[i].pid == parent_id)
     {
-      io_queue[i].children -= 1;
-      // If children is 0, then parent process can be unblocked by idle CPU later
-      if (io_queue[i].children == 0 && io_queue[i].block_end == -1)
-      {
-        io_queue[i].block_end = 0;
-      }
-      break;
+      blocked_queue[i].children -= 1;
     }
   }
   printf("Time - %i\n", total_time);
   printf("Process %s, pid - %i running -> exit, transition 0usecs\n", (*process).name, (*process).pid);
-  (*process).status = exited;
   struct command buf;
   dequeue(&buf, ready_queue, &ready_front, &ready_back);
+  nprocesses -= 1;
 }
 
 void call_spawn(int line, struct command *process)
@@ -533,9 +535,8 @@ void one_time_quantum(void)
 {
   struct command *front = &ready_queue[ready_front];
 
-  (*front).status = running;
   printf("Time - %i\n", total_time);
-  printf("Running process %s, pid-%i, ready -> running, transition 5usecs\n",
+  printf("Running process %s, pid - %i, ready -> running, transition 5usecs\n",
          (*front).name, (*front).pid);
   total_time += TIME_CONTEXT_SWITCH;
   //  Variable to determine which "line" of the command we are on
@@ -560,7 +561,6 @@ void one_time_quantum(void)
     printf("Time quantum expired, process %s pid - %i, running -> ready 10usecs\n",
            (*front).name, (*front).pid);
     total_time += TIME_CORE_STATE_TRANSITIONS;
-    (*front).status = ready;
     requeue(ready_queue, &ready_front, &ready_back);
   }
   else
@@ -596,6 +596,24 @@ void unblock_sleep(void)
 
 void unblock_wait(void)
 {
+  for (int i = blocked_front; i != (blocked_back + 1) % MAX_RUNNING_PROCESSES && !check_empty(blocked_front); i = (i + 1) % MAX_RUNNING_PROCESSES)
+  {
+    if (blocked_queue[i].block_end != -1)
+    {
+      requeue(blocked_queue, &blocked_front, &blocked_back);
+      continue;
+    }
+    if (blocked_queue[i].children == 0)
+    {
+      struct command buf;
+      dequeue(&buf, blocked_queue, &blocked_front, &blocked_back);
+      buf.block_end = 0;
+      enqueue(buf, ready_queue, &ready_front, &ready_back);
+      printf("Time - %i\n", total_time);
+      printf("pid - %i, waiting -> ready, transition 10usecs\n", buf.pid);
+      total_time += TIME_CORE_STATE_TRANSITIONS;
+    }
+  }
 }
 
 void unblock_io(void)
@@ -606,17 +624,6 @@ void commence_io(void)
 {
 }
 
-int all_queues_empty(void)
-{
-  if (check_empty(ready_front) && check_empty(blocked_front) && check_empty(io_front))
-  {
-    return 1;
-  }
-  else
-  {
-    return 0;
-  }
-}
 //  ----------------------------------------------------------------------
 //  Main driver function.
 
@@ -626,7 +633,7 @@ void execute_commands(void)
   new_process(&command_buffer, &command_list[0]);
   enqueue(command_buffer, ready_queue, &ready_front, &ready_back);
 
-  while (!all_queues_empty())
+  while (nprocesses > 0)
   {
     if (!check_empty(ready_front))
     {
@@ -634,12 +641,15 @@ void execute_commands(void)
     }
 
     // Implement idle cpu priorities here.
-    unblock_sleep();
-    unblock_wait();
-    unblock_io();
+    if (!check_full(ready_front, ready_back))
+    {
+      unblock_sleep();
+      unblock_wait();
+      unblock_io();
+    }
+
     commence_io();
 
-    // if nothing was unblocked, increment time, until something is unblocked.
     if (check_empty(ready_front) && databus == vacant)
     {
       total_time += 1;
@@ -666,7 +676,8 @@ int main(int argc, char *argv[])
   execute_commands();
 
   //  PRINT THE PROGRAM'S RESULTS
-  int percentage = cpu_time * 100 / total_time;
+  total_time -= 1;
+  int percentage = cpu_time * 100 / (total_time);
   printf("measurements  %i  %i\n", total_time, percentage);
 
   exit(EXIT_SUCCESS);
