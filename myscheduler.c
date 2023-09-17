@@ -505,14 +505,15 @@ void call_io(int line, struct command *process, enum syscall_type io_type)
   {
   case _read_:
     int rspeed = device_list[device].read_speed;
-    int rtime = size / rspeed;
+    // Convert rspeed to rate in usecs, and add as integer division will give floor.
+    int rtime = (size / (rspeed / 1000000)) + 1 + TIME_ACQUIRE_BUS;
     (*process).io_time = rtime;
     printf("Time - %i\n", total_time);
     printf("Reading %ibytes, pid - %i, running -> blocked, transition 10usecs\n", size, (*process).pid);
     break;
   case _write_:
     int wspeed = device_list[device].write_speed;
-    int wtime = size / wspeed;
+    int wtime = (size / (wspeed / 1000000)) + 1 + TIME_ACQUIRE_BUS;
     (*process).io_time = wtime;
     printf("Time - %i\n", total_time);
     printf("Writing %ibytes, pid - %i, running -> blocked, transition 10usecs\n", size, (*process).pid);
@@ -666,6 +667,8 @@ void unblock_io(void)
       enqueue(buf, ready_queue, &ready_front, &ready_back);
       printf("Time - %i\n", total_time);
       printf("pid - %i completed io, blocked -> ready, transition 10usecs\n", buf.pid);
+      databus = vacant;
+      printf("Device - %s finish io. Data bus now idle.\n", device_list[buf.io_device_waiting].name);
       total_time += TIME_CORE_STATE_TRANSITIONS;
     }
   }
@@ -674,11 +677,34 @@ void unblock_io(void)
 //  Comparison functions for qsort()
 int comp(const void *a, const void *b)
 {
-  return (*(int *)a - *(int *)b);
+  return (*(int *)b - *(int *)a);
 }
 
 void commence_io(void)
 {
+  int device_speeds[MAX_DEVICES];
+  for (int i = 0; i < MAX_DEVICES; i++)
+  {
+    device_speeds[i] = device_list[i].read_speed;
+  }
+  qsort(device_speeds, MAX_DEVICES, sizeof(int), comp);
+
+  for (int i = 0; i < MAX_DEVICES; i++)
+  {
+    for (int j = io_front; j != (io_back + 1) % MAX_RUNNING_PROCESSES; j = (j + 1) % MAX_RUNNING_PROCESSES)
+    {
+      int requested_device = io_queue[j].io_device_waiting;
+      if (device_list[requested_device].read_speed == device_speeds[i])
+      {
+        printf("Time - %i\n", total_time);
+        printf("Device - %s acquiring databus, will take %i usecs.\n",
+               device_list[requested_device].name, io_queue[j].io_time);
+        databus = occupied;
+        io_queue[j].io_end = total_time + io_queue[j].io_time;
+        return;
+      }
+    }
+  }
 }
 
 //  ----------------------------------------------------------------------
@@ -706,10 +732,13 @@ void execute_commands(void)
       unblock_io();
     }
 
-    commence_io();
+    if (databus == vacant && !check_empty(io_front))
+    {
+      commence_io();
+    }
 
     // If nothing is ready and no io commences after checks, then increment time.
-    if (check_empty(ready_front) && databus == vacant)
+    if (check_empty(ready_front))
     {
       total_time += 1;
     }
