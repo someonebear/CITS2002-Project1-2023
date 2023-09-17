@@ -7,7 +7,7 @@
 //  Student2:   23097196   JOSHUA CHUANG
 
 //  myscheduler (v1.0)
-//  Compile with:  cc -std=c11 -Wall -Werror -o myscheduler myscheduler.c
+//  Compile with:  cc -std=c11 -Wall -Werror -g -o myscheduler myscheduler.c
 
 #define MAX_DEVICES 4
 #define MAX_DEVICE_NAME 20
@@ -64,6 +64,8 @@ struct command
   int io_end;
   // Store number of children, for processes that wait for child processes.
   int children;
+  // Lines in command.
+  int lines;
   // Pointers to arrays that store command file data
   int *times;
   enum syscall_type *syscalls;
@@ -326,6 +328,7 @@ void read_commands(char argv0[], char filename[])
   int num_commands = get_command_lengths(command_file, command_lengths);
   for (int i = 0; i < num_commands; i++)
   {
+    command_list[i].lines = command_lengths[i];
     size_t size_array = command_lengths[i] * sizeof(int);
     command_list[i].times = malloc(size_array);
     command_list[i].syscalls = malloc(size_array);
@@ -572,8 +575,16 @@ void one_time_quantum(void)
   {
     if ((*front).times[i] > (*front).on_cpu)
     {
-      line = i;
-      break;
+      if (i < (*front).lines)
+      {
+        line = i;
+        break;
+      }
+      else
+      {
+        line = (*front).lines - 1;
+        break;
+      }
     }
   }
 
@@ -582,11 +593,12 @@ void one_time_quantum(void)
 
   // Determine how far into the "line" we are.
   int computation = (*front).times[line] - (*front).on_cpu;
-  if (computation > time_quantum)
+  if (computation >= time_quantum)
   {
     (*front).on_cpu += time_quantum;
     cpu_time += time_quantum;
     total_time += time_quantum;
+    printf("Time - %i\n", total_time);
     printf("Time quantum expired, process %s pid - %i, running -> ready 10usecs\n",
            (*front).name, (*front).pid);
     total_time += TIME_CORE_STATE_TRANSITIONS;
@@ -617,10 +629,9 @@ void unblock_sleep(void)
     {
       struct command buf;
       dequeue(&buf, blocked_queue, &blocked_front, &blocked_back);
-      buf.block_end = 0;
       enqueue(buf, ready_queue, &ready_front, &ready_back);
       printf("Time - %i\n", total_time);
-      printf("pid - %i waking, sleeping -> ready, transition 10usecs\n", buf.pid);
+      printf("pid - %i waking, sleeping -> ready, transition 10p blocusecs\n", buf.pid);
       total_time += TIME_CORE_STATE_TRANSITIONS;
     }
   }
@@ -741,6 +752,12 @@ void execute_commands(void)
     if (check_empty(ready_front))
     {
       total_time += 1;
+    }
+
+    if (total_time > 2000000000)
+    {
+      printf("Time out.\n");
+      exit(EXIT_FAILURE);
     }
   }
 }

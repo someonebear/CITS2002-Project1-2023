@@ -1,0 +1,18 @@
+#
+firstcommand
+	10usecs    sleep    20usecs
+	40usecs    spawn    secondcommand
+	50usecs    wait
+	150usecs   exit
+#
+secondcommand
+	30usecs    sleep    10usecs
+	50usecs    spawn    thirdcommand
+	80usecs    write    hd    400B
+	200usecs   read     ssd   480B
+	310usecs   exit
+#
+thirdcommand
+	40usecs    read    hd       1600B
+	250usecs   exit
+#
